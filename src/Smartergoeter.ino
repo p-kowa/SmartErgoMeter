@@ -18,8 +18,8 @@ boolean write_startup_message = true;
 // GEAR_RATIO = speed_counter / 10
 #define GEAR_RATIO  9.0
 
-// Schwungrad-Umfang in mm (kalibrieren mit Originalgeschwindigkeit)
-#define WHEEL_CIRCUMFERENCE_MM  1200.0
+// Schwungrad-Umfang in mm (Magnet bei 6cm Radius = 2π×60mm ≈ 377mm)
+#define WHEEL_CIRCUMFERENCE_MM  377.0
 
 // Gewicht Fahrer in kg (für Leistungsberechnung)
 #define RIDER_WEIGHT_KG  80.0
