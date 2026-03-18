@@ -8,7 +8,7 @@
 // ============================================================
 // KONFIGURATION
 // ============================================================
-#define FAKE_DATA 1                    // 1 = Testdaten, 0 = echte Sensoren
+#define FAKE_DATA 0                    // 1 = Testdaten, 0 = echte Sensoren
 
 boolean serial_debug         = true;  // false wenn kein PC angeschlossen
 boolean write_startup_message = true;
@@ -27,14 +27,18 @@ boolean write_startup_message = true;
 // ============================================================
 // PIN DEFINITIONEN (ESP32-S3)
 // ============================================================
-#define PIN_REED        6    // Reed-Kontakt → Speed + Cadence (5V via 10k/18k Teiler)
-#define PIN_HEARTRATE   7    // Herzfrequenz Sensor (5V via 10k/18k Teiler)
-#define PIN_POTI        3    // ADC Potentiometer Schleifer (5V via 10k/18k Teiler)
-#define PIN_POTI_EN     4    // MOSFET Gate: Poti-Versorgung einschalten
-#define PIN_SENSE_A     8    // EM78P510 Motor-Ausgang A (3.3V direkt)
-#define PIN_SENSE_B     9    // EM78P510 Motor-Ausgang B (3.3V direkt)
+#define PIN_REED        2    // Reed-Kontakt → Speed + Cadence (5V via 10k/18k Teiler)
+                             // GPIO6=JTAG/MOSI auf ESP32-C3 → spurious Interrupts, daher GPIO2
+#define PIN_HEARTRATE   7    // Herzfrequenz Sensor (5V via 10k/18k Teiler) - GPIO7 funktioniert
+#define PIN_POTI        4    // ADC Potentiometer Schleifer (ADC1_CH4, kein BLE-Konflikt)
+#define PIN_POTI_EN     5    // MOSFET Gate: Poti-Versorgung einschalten
+#define PIN_EM78_ACTIVE 1    // EM78P510 aktiv (OR: SENSE_A + SENSE_B via 2× BAT46 → GPIO1)
+                             // GPIO8 = RGB-LED auf C3 Super Mini → nicht verwenden!
+                             // Hardware: SENSE_A ──BAT46──┐
+                             //           SENSE_B ──BAT46──┴── GPIO1 + 10k→GND
+                             // HIGH = EM78P510 drückt Taste → DRV8833 sofort stoppen
 #define PIN_MOTOR_IN1   10   // DRV8833 IN1
-#define PIN_MOTOR_IN2   11   // DRV8833 IN2
+#define PIN_MOTOR_IN2   20   // DRV8833 IN2 (GPIO11 oft SPI-Flash intern auf C3!)
 
 // ============================================================
 // MOTORSTEUERUNG
@@ -73,11 +77,20 @@ int readPotiPosition() {
 }
 
 // Motor auf Zielposition fahren (blockierend, max 5 Sek.)
+// Bricht sofort ab wenn EM78P510 eine Taste drückt (Kollisionsschutz)
 void driveToPosition(int targetPct) {
   int targetAdc  = map(targetPct, 0, 100, 0, 4095);
   unsigned long startTime = millis();
 
   while (millis() - startTime < 5000) {
+
+    // Kollisionsschutz: EM78P510 aktiv → sofort stoppen
+    if (digitalRead(PIN_EM78_ACTIVE)) {
+      motorStop();
+      if (serial_debug) Serial.println("Motor: EM78P510 aktiv, DRV8833 gestoppt!");
+      return;
+    }
+
     int currentAdc = readPotiPosition();
     currentResistance = map(currentAdc, 0, 4095, 0, 100);
 
@@ -99,14 +112,10 @@ void driveToPosition(int targetPct) {
   if (serial_debug) Serial.println("Motor: Timeout!");
 }
 
-// Passthrough: EM78P510 Tasten → DRV8833 (nur im MANUAL Modus)
-void handlePassthrough() {
-  bool senseA = digitalRead(PIN_SENSE_A);
-  bool senseB = digitalRead(PIN_SENSE_B);
-
-  if      (senseA && !senseB) motorUp();
-  else if (!senseA && senseB) motorDown();
-  else                        motorStop();
+// MANUAL Modus: EM78P510 treibt Motor direkt über eigene H-Brücke
+// DRV8833 bleibt gestoppt damit keine Kollision entsteht
+void handleManualMode() {
+  motorStop(); // DRV8833 aus dem Weg räumen
 }
 
 // ============================================================
@@ -133,11 +142,14 @@ float  crr                 = 0;
 float  cw                  = 0;
 
 // Reed-Kontakt Interrupt → Speed + Cadence
+// Debounce 50ms: verhindert Mehrfachtrigger durch Kontaktprellen
 void IRAM_ATTR reedInterrupt() {
+  unsigned long now = millis();
+  if (now - speed_timer < 50) return;  // Prellunterdrückung
   speed_counter++;
-  speed_timer            = millis();
+  speed_timer            = now;
   cadence_previous_timer = cadence_timer;
-  cadence_timer          = millis();
+  cadence_timer          = now;
 }
 
 // Herzfrequenz Interrupt
@@ -147,10 +159,14 @@ void IRAM_ATTR heartRateInterrupt() {
 }
 
 double calculateSpeed() {
+  // Noch keine 2 gültigen Messungen vorhanden
+  if (speed_timer == 0 || speed_timer_prev == 0) return 0.0;
+  // Kein Signal seit >3 Sek. → Geschwindigkeit = 0
+  if (millis() - speed_timer > 3000) return 0.0;
   if (speed_timer == speed_timer_prev) return 0.0;
   unsigned long delta_count = speed_counter - speed_counter_prev;
   unsigned long delta_time  = speed_timer   - speed_timer_prev;
-  if (delta_time > 5000) return 0.0;
+  if (delta_count == 0 || delta_time == 0 || delta_time > 5000) return 0.0;
   return (delta_count * WHEEL_CIRCUMFERENCE_MM / 1000.0) / (delta_time / 1000.0); // m/s
 }
 
@@ -162,6 +178,8 @@ unsigned int calculateCadence() {
 }
 
 uint8_t calculateHeartRate() {
+  // Kein Signal seit >3 Sek. → HR = 0 (Hände weg vom Sensor)
+  if (millis() - hr_timer > 3000) return 0;
   unsigned long interval = hr_timer - hr_previous_timer;
   if (interval < 300 || interval > 3000) return 0;
   return (uint8_t)(60000 / interval);
@@ -287,9 +305,8 @@ void setup() {
   pinMode(PIN_MOTOR_IN2, OUTPUT);
   motorStop();
 
-  // EM78P510 Sense Pins
-  pinMode(PIN_SENSE_A, INPUT);
-  pinMode(PIN_SENSE_B, INPUT);
+  // EM78P510 Aktivitätserkennung (OR: SENSE_A + SENSE_B via 2× BAT46)
+  pinMode(PIN_EM78_ACTIVE, INPUT);
 
   // Poti Enable (MOSFET)
   pinMode(PIN_POTI_EN, OUTPUT);
@@ -347,7 +364,7 @@ void setup() {
 // ============================================================
 void loop() {
 
-#ifdef FAKE_DATA
+#if FAKE_DATA
   static unsigned long fake_tick;
   static unsigned long fake_duration = 900;
   static int           fake_increase = 50;
@@ -384,30 +401,29 @@ void loop() {
     // ESP32 hat Vorrang → Zielposition halten
     // driveToPosition() wird aus handleControlPoint() aufgerufen
   } else {
-    // MANUAL: EM78P510 Tasten durchleiten
-    handlePassthrough();
+    // MANUAL: EM78P510 treibt Motor direkt, DRV8833 gestoppt halten
+    handleManualMode();
   }
 
   // ---- BLE Notifications ----
-  if (ble_connected == HIGH) {
-    current_millis = millis();
-    if (current_millis > previous_notification + NOTIFICATION_INTERVAL) {
+  current_millis = millis();
+  if (current_millis > previous_notification + NOTIFICATION_INTERVAL) {
 
-      // Sensorwerte berechnen
-      instantaneous_speed   = calculateSpeed();
-      instantaneous_cadence = calculateCadence();
-      HeartRate             = calculateHeartRate();
-      instantaneous_power   = calculatePower(instantaneous_speed);
+    // Sensorwerte berechnen (immer, damit Snapshots aktuell bleiben)
+    instantaneous_speed   = calculateSpeed();
+    instantaneous_cadence = calculateCadence();
+    HeartRate             = calculateHeartRate();
+    instantaneous_power   = calculatePower(instantaneous_speed);
 
+    // Counter-Snapshots immer aktualisieren (verhindert Akkumulation)
+    speed_counter_prev = speed_counter;
+    speed_timer_prev   = speed_timer;
+    previous_notification = millis();
+
+    if (ble_connected == HIGH) {
       // Aktuelle Poti-Position lesen
       currentResistance = map(readPotiPosition(), 0, 4095, 0, 100);
-
       writeIndoorBikeDataCharacteristic();
-      previous_notification = millis();
-
-      // Counter-Snapshots für nächste Berechnung
-      speed_counter_prev = speed_counter;
-      speed_timer_prev   = speed_timer;
     }
   }
 
