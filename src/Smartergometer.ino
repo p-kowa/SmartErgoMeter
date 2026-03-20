@@ -13,13 +13,11 @@
 boolean serial_debug         = true;  // false wenn kein PC angeschlossen
 boolean write_startup_message = true;
 
-// Übersetzungsverhältnis Schwungrad → Kurbel
-// Kalibrieren: 10 Kurbelumdrehungen zählen + speed_counter ablesen
-// GEAR_RATIO = speed_counter / 10
-#define GEAR_RATIO  9.0
-
-// Schwungrad-Umfang in mm (Magnet bei 6cm Radius = 2π×60mm ≈ 377mm)
-#define WHEEL_CIRCUMFERENCE_MM  377.0
+// Effektive Distanz pro Kurbel-Umdrehung (Reed sitzt an der Kurbel, 1 Impuls = 1 Umdrehung)
+// Enthält implizit das Ergometer-Getriebe → kein separates GEAR_RATIO nötig
+// Kalibrierung: WHEEL_CIRCUMFERENCE_MM = aktueller_Wert × (Display_km_h / App_km_h)
+// Gemessen: Display=21.6 km/h, App=1.3 km/h → 377 × (21.6/1.3) ≈ 6264 mm
+#define WHEEL_CIRCUMFERENCE_MM  6264.0
 
 // Gewicht Fahrer in kg (für Leistungsberechnung)
 #define RIDER_WEIGHT_KG  80.0
@@ -27,7 +25,10 @@ boolean write_startup_message = true;
 // ============================================================
 // PIN DEFINITIONEN (ESP32-S3)
 // ============================================================
-#define PIN_REED        2    // Reed-Kontakt → Speed + Cadence (5V via 10k/18k Teiler)
+#define PIN_REED        2    // Reed-Kontakt → Speed + Cadence
+                             // Hardware: Reed-Leitung (4.7V) ──10kΩ──GPIO2
+                             // 10kΩ Reihenwiderstand schützt ESP32 (max 3.6V)
+                             // Kein Teiler nach GND → EM78P510 bleibt unbelastet
                              // GPIO6=JTAG/MOSI auf ESP32-C3 → spurious Interrupts, daher GPIO2
 #define PIN_HEARTRATE   7    // Herzfrequenz Sensor (5V via 10k/18k Teiler) - GPIO7 funktioniert
 #define PIN_POTI        4    // ADC Potentiometer Schleifer (ADC1_CH4, kein BLE-Konflikt)
@@ -171,10 +172,10 @@ double calculateSpeed() {
 }
 
 unsigned int calculateCadence() {
+  // Reed an Kurbel → 1 Impuls = 1 Kurbelumdrehung → direkt RPM
   unsigned long interval = cadence_timer - cadence_previous_timer;
   if (interval < 200 || interval > 5000) return 0;
-  float schwungrad_rpm = 60000.0 / interval;
-  return (unsigned int)round(schwungrad_rpm / GEAR_RATIO);
+  return (unsigned int)round(60000.0 / interval);
 }
 
 uint8_t calculateHeartRate() {
