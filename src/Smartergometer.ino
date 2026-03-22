@@ -6,67 +6,67 @@
 #include "esp_mac.h"
 
 // ============================================================
-// KONFIGURATION
+// CONFIGURATION
 // ============================================================
-#define FAKE_DATA 0                    // 1 = Testdaten, 0 = echte Sensoren
+#define FAKE_DATA 0                    // 1 = test data, 0 = real sensors
 
-boolean serial_debug         = true;  // false wenn kein PC angeschlossen
+boolean serial_debug         = true;  // false when no PC connected
 boolean write_startup_message = true;
 
-// Effektive Distanz pro Kurbel-Umdrehung (Reed sitzt an der Kurbel, 1 Impuls = 1 Umdrehung)
-// Enthält implizit das Ergometer-Getriebe → kein separates GEAR_RATIO nötig
-// Kalibrierung: WHEEL_CIRCUMFERENCE_MM = aktueller_Wert × (Display_km_h / App_km_h)
-// Gemessen: Display=21.6 km/h, App=1.3 km/h → 377 × (21.6/1.3) ≈ 6264 mm
+// Effective distance per crank revolution (reed is on the crank, 1 pulse = 1 revolution)
+// Implicitly includes the ergometer gear ratio → no separate GEAR_RATIO needed
+// Calibration: WHEEL_CIRCUMFERENCE_MM = current_value × (display_km_h / app_km_h)
+// Measured: display=21.6 km/h, app=1.3 km/h → 377 × (21.6/1.3) ≈ 6264 mm
 #define WHEEL_CIRCUMFERENCE_MM  6264.0
 
-// Gewicht Fahrer in kg (für Leistungsberechnung)
+// Rider weight in kg (used for power calculation)
 #define RIDER_WEIGHT_KG  80.0
 
-// Potentiometer ADC-Grenzen (0-4095)
-// Kalibrieren: Motor manuell an Endanschlag fahren, Raw-ADC im Serial Monitor ablesen
-// Serial zeigt: "Poti: X% (ADC=YYYY)" → YYYY an Minimum- und Maximum-Anschlag notieren
-#define POTI_ADC_MIN     1246  // ADC-Wert bei minimalem Widerstand (gemessen: 1245-1247)
-#define POTI_ADC_MAX     4059  // ADC-Wert bei maximalem Widerstand (gemessen: 4058-4060)
+// Potentiometer ADC limits (0-4095)
+// Calibration: drive motor manually to each end stop, read raw ADC from Serial Monitor
+// Serial output: "Poti: X% (ADC=YYYY)" → note YYYY at minimum and maximum end stop
+#define POTI_ADC_MIN     1246  // ADC value at minimum resistance (measured: 1245-1247)
+#define POTI_ADC_MAX     4059  // ADC value at maximum resistance (measured: 4058-4060)
 
 // ============================================================
-// PIN DEFINITIONEN (ESP32-S3)
+// PIN DEFINITIONS (ESP32-S3)
 // ============================================================
-#define PIN_REED        2    // Reed-Kontakt → Speed + Cadence
-                             // Hardware: Reed-Leitung (4.7V) ──10kΩ──GPIO2
-                             // 10kΩ Reihenwiderstand schützt ESP32 (max 3.6V)
-                             // Kein Teiler nach GND → EM78P510 bleibt unbelastet
-                             // GPIO6=JTAG/MOSI auf ESP32-C3 → spurious Interrupts, daher GPIO2
-#define PIN_HEARTRATE   7    // Herzfrequenz Sensor (5V via 10k/18k Teiler) - GPIO7 funktioniert
-#define PIN_POTI        3    // ADC Potentiometer Schleifer
-                             // Hardware: Poti-Schleifer ──32kΩ──GPIO3──66kΩ──GND (Spannungsteiler)
-                             // Poti-VCC ~5V → Teiler: 5V × 66/(32+66) = 3.34V → sicher für ESP32 (max 3.6V)
-#define PIN_POTI_EN     5    // PNP-Transistor Basis-Steuerung (aktiv LOW!)
-                             // GPIO5 LOW  → PNP öffnet → Poti bekommt Strom (Messung)
-                             // GPIO5 HIGH → PNP sperrt → Poti stromlos (Ruhezustand)
-                             // EM78P510 steuert PNP ebenfalls über 10kΩ → beide teilen sich den Transistor
-                             // Kontention unkritisch da 10kΩ + 12kΩ in Reihe (~0.2mA)
-#define PIN_EM78_ACTIVE 1    // EM78P510 aktiv (OR: Motor-OUT1 + Motor-OUT2 via 2× BAT43 → GPIO1)
-                             // GPIO8 = RGB-LED auf C3 Super Mini → nicht verwenden!
+#define PIN_REED        2    // Reed contact → speed + cadence
+                             // Hardware: reed line (4.7V) ──10kΩ──GPIO2
+                             // 10kΩ series resistor protects ESP32 (max 3.6V)
+                             // No divider to GND → EM78P510 remains unloaded
+                             // GPIO6=JTAG/MOSI on ESP32-C3 → spurious interrupts, use GPIO2 instead
+#define PIN_HEARTRATE   7    // Heart rate sensor (5V via 10k/18k divider) - GPIO7 works
+#define PIN_POTI        3    // ADC potentiometer wiper
+                             // Hardware: poti wiper ──32kΩ──GPIO3──66kΩ──GND (voltage divider)
+                             // Poti VCC ~5V → divider: 5V × 66/(32+66) = 3.34V → safe for ESP32 (max 3.6V)
+#define PIN_POTI_EN     5    // PNP transistor base control (active LOW!)
+                             // GPIO5 LOW  → PNP conducts → poti powered (measurement)
+                             // GPIO5 HIGH → PNP off → poti unpowered (idle)
+                             // EM78P510 also drives PNP via 10kΩ → both share the transistor
+                             // Contention non-critical: 10kΩ + 12kΩ in series (~0.2mA)
+#define PIN_EM78_ACTIVE 1    // EM78P510 active (OR: motor-OUT1 + motor-OUT2 via 2× BAT43 → GPIO1)
+                             // GPIO8 = RGB LED on C3 Super Mini → do not use!
                              // Hardware: EM78-OUT1 ──BAT43──┐
                              //           EM78-OUT2 ──BAT43──┴──8.2kΩ──GPIO1──100kΩ──GND
-                             // 5V - 0.35V(BAT43) = 4.65V → Klemmdiode: 0.16mA → sicher
-                             // HIGH = EM78P510 treibt Motor → ESP32 sofort stoppen
-#define PIN_MOTOR_IN1   10   // H-Bridge Transistor 1 Basis (ESP32 über 12kΩ, EM78P510 über 10kΩ)
-#define PIN_MOTOR_IN2   20   // H-Bridge Transistor 2 Basis (ESP32 über 12kΩ, EM78P510 über 10kΩ)
-                             // KINOMAP: OUTPUT (ESP32 treibt HIGH/LOW)
-                             // MANUAL:  INPUT  (High-Z → EM78P510 hat volle Kontrolle)
+                             // 5V - 0.35V(BAT43) = 4.65V → clamp diode: 0.16mA → safe
+                             // HIGH = EM78P510 driving motor → ESP32 must stop immediately
+#define PIN_MOTOR_IN1   10   // H-bridge transistor 1 base (ESP32 via 12kΩ, EM78P510 via 10kΩ)
+#define PIN_MOTOR_IN2   20   // H-bridge transistor 2 base (ESP32 via 12kΩ, EM78P510 via 10kΩ)
+                             // KINOMAP: OUTPUT (ESP32 drives HIGH/LOW)
+                             // MANUAL:  INPUT  (high-Z → EM78P510 has full control)
 
 // ============================================================
-// MOTORSTEUERUNG
+// MOTOR CONTROL
 // ============================================================
 enum ControlMode { KINOMAP, MANUAL };
-ControlMode motorMode        = MANUAL; // Beim Start ohne BLE: Manual
-int targetResistance         = 0;      // 0-100% Zielwiderstand von KinoMap
-int currentResistance        = 0;      // Aktuelle Position (aus Poti)
+ControlMode motorMode        = MANUAL; // On startup without BLE: manual
+int targetResistance         = 0;      // 0-100% target resistance from KinoMap
+int currentResistance        = 0;      // Current position (from poti)
 unsigned long lastMotorCmd   = 0;
-#define MOTOR_TIMEOUT        5000      // ms ohne KinoMap-Befehl → zurück zu MANUAL
-#define POTI_TOLERANCE       80        // ADC-Toleranzband (0-4095)
-#define MOTOR_DRIVE_INTERVAL 50        // ms zwischen Poti-Lesungen beim Fahren
+#define MOTOR_TIMEOUT        5000      // ms without KinoMap command → switch back to MANUAL
+#define POTI_TOLERANCE       80        // ADC tolerance band (0-4095)
+#define MOTOR_DRIVE_INTERVAL 50        // ms between poti readings while driving
 
 void motorUp() {
   pinMode(PIN_MOTOR_IN1, OUTPUT);
@@ -85,32 +85,32 @@ void motorDown() {
 void motorStop() {
   digitalWrite(PIN_MOTOR_IN1, LOW);
   digitalWrite(PIN_MOTOR_IN2, LOW);
-  pinMode(PIN_MOTOR_IN1, INPUT);  // High-Z → EM78P510 kann frei steuern
+  pinMode(PIN_MOTOR_IN1, INPUT);  // high-Z → EM78P510 can control freely
   pinMode(PIN_MOTOR_IN2, INPUT);
 }
 
-// Poti kurz einschalten + ADC lesen
-// PNP-Logik: LOW = EIN, HIGH = AUS
+// Briefly power poti and read ADC
+// PNP logic: LOW = ON, HIGH = OFF
 int readPotiPosition() {
-  digitalWrite(PIN_POTI_EN, LOW);   // PNP öffnen → Poti einschalten
+  digitalWrite(PIN_POTI_EN, LOW);   // turn PNP on → power poti
   delay(5);
   int val = analogRead(PIN_POTI);
-  digitalWrite(PIN_POTI_EN, HIGH);  // PNP sperren → Poti ausschalten
+  digitalWrite(PIN_POTI_EN, HIGH);  // turn PNP off → unpower poti
   return val; // 0-4095
 }
 
-// Motor auf Zielposition fahren (blockierend, max 5 Sek.)
-// Bricht sofort ab wenn EM78P510 eine Taste drückt (Kollisionsschutz)
+// Drive motor to target position (blocking, max 5 sec)
+// Aborts immediately if EM78P510 presses a button (collision protection)
 void driveToPosition(int targetPct) {
   int targetAdc  = map(targetPct, 0, 100, POTI_ADC_MIN, POTI_ADC_MAX);
   unsigned long startTime = millis();
 
   while (millis() - startTime < 5000) {
 
-    // Kollisionsschutz: EM78P510 aktiv → sofort stoppen
+    // Collision protection: EM78P510 active → stop immediately
     if (digitalRead(PIN_EM78_ACTIVE)) {
       motorStop();
-      if (serial_debug) Serial.println("Motor: EM78P510 aktiv, DRV8833 gestoppt!");
+      if (serial_debug) Serial.println("Motor: EM78P510 active, motor stopped!");
       return;
     }
 
@@ -120,7 +120,7 @@ void driveToPosition(int targetPct) {
     if (abs(currentAdc - targetAdc) <= POTI_TOLERANCE) {
       motorStop();
       if (serial_debug) {
-        Serial.printf("Motor: Ziel erreicht %d%% (ADC=%d)\n", targetPct, currentAdc);
+        Serial.printf("Motor: target reached %d%% (ADC=%d)\n", targetPct, currentAdc);
       }
       return;
     }
@@ -131,18 +131,18 @@ void driveToPosition(int targetPct) {
     delay(MOTOR_DRIVE_INTERVAL);
   }
 
-  motorStop(); // Timeout
-  if (serial_debug) Serial.println("Motor: Timeout!");
+  motorStop(); // timeout
+  if (serial_debug) Serial.println("Motor: timeout!");
 }
 
-// MANUAL Modus: EM78P510 treibt Motor direkt über eigene H-Brücke
-// DRV8833 bleibt gestoppt damit keine Kollision entsteht
+// MANUAL mode: EM78P510 drives motor directly via its own H-bridge
+// Motor pins kept high-Z so there is no conflict
 void handleManualMode() {
-  motorStop(); // DRV8833 aus dem Weg räumen
+  motorStop(); // keep pins high-Z
 }
 
 // ============================================================
-// SENSOREN
+// SENSORS
 // ============================================================
 volatile unsigned long speed_counter          = 0;
 volatile unsigned long speed_timer            = 0;
@@ -164,27 +164,27 @@ float  wind_speed          = 0;
 float  crr                 = 0;
 float  cw                  = 0;
 
-// Reed-Kontakt Interrupt → Speed + Cadence
-// Debounce 50ms: verhindert Mehrfachtrigger durch Kontaktprellen
+// Reed contact interrupt → speed + cadence
+// Debounce 50ms: prevents multiple triggers from contact bounce
 void IRAM_ATTR reedInterrupt() {
   unsigned long now = millis();
-  if (now - speed_timer < 50) return;  // Prellunterdrückung
+  if (now - speed_timer < 50) return;  // debounce
   speed_counter++;
   speed_timer            = now;
   cadence_previous_timer = cadence_timer;
   cadence_timer          = now;
 }
 
-// Herzfrequenz Interrupt
+// Heart rate interrupt
 void IRAM_ATTR heartRateInterrupt() {
   hr_previous_timer = hr_timer;
   hr_timer          = millis();
 }
 
 double calculateSpeed() {
-  // Noch keine 2 gültigen Messungen vorhanden
+  // Not yet two valid measurements available
   if (speed_timer == 0 || speed_timer_prev == 0) return 0.0;
-  // Kein Signal seit >3 Sek. → Geschwindigkeit = 0
+  // No signal for >3 sec → speed = 0
   if (millis() - speed_timer > 3000) return 0.0;
   if (speed_timer == speed_timer_prev) return 0.0;
   unsigned long delta_count = speed_counter - speed_counter_prev;
@@ -194,14 +194,14 @@ double calculateSpeed() {
 }
 
 unsigned int calculateCadence() {
-  // Reed an Kurbel → 1 Impuls = 1 Kurbelumdrehung → direkt RPM
+  // Reed on crank → 1 pulse = 1 crank revolution → direct RPM
   unsigned long interval = cadence_timer - cadence_previous_timer;
   if (interval < 200 || interval > 5000) return 0;
   return (unsigned int)round(60000.0 / interval);
 }
 
 uint8_t calculateHeartRate() {
-  // Kein Signal seit >3 Sek. → HR = 0 (Hände weg vom Sensor)
+  // No signal for >3 sec → HR = 0 (hands off sensor)
   if (millis() - hr_timer > 3000) return 0;
   unsigned long interval = hr_timer - hr_previous_timer;
   if (interval < 300 || interval > 3000) return 0;
@@ -280,17 +280,17 @@ BLECharacteristic *pFitnessMachineStatus          = nullptr;
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *pSrv) override {
     ble_connected = HIGH;
-    motorMode     = KINOMAP; // BLE verbunden → ESP32 hat Vorrang
-    rgbLedWrite(RGB_BUILTIN, 0, 0, RGB_BRIGHTNESS); // Blau
-    if (serial_debug) Serial.println("BLE verbunden → KINOMAP Modus");
+    motorMode     = KINOMAP; // BLE connected → ESP32 takes control
+    rgbLedWrite(RGB_BUILTIN, 0, 0, RGB_BRIGHTNESS); // blue
+    if (serial_debug) Serial.println("BLE connected → KINOMAP mode");
   }
   void onDisconnect(BLEServer *pSrv) override {
     ble_connected = LOW;
-    motorMode     = MANUAL;  // BLE getrennt → EM78P510 Tasten aktiv
+    motorMode     = MANUAL;  // BLE disconnected → EM78P510 buttons active
     motorStop();
-    rgbLedWrite(RGB_BUILTIN, RGB_BRIGHTNESS, RGB_BRIGHTNESS, 0); // Gelb
+    rgbLedWrite(RGB_BUILTIN, RGB_BRIGHTNESS, RGB_BRIGHTNESS, 0); // yellow
     BLEDevice::getAdvertising()->start();
-    if (serial_debug) Serial.println("BLE getrennt → MANUAL Modus");
+    if (serial_debug) Serial.println("BLE disconnected → MANUAL mode");
   }
 };
 
@@ -318,27 +318,27 @@ void setup() {
   if (serial_debug) {
     Serial.begin(115200);
     delay(1000);
-    Serial.println("SmartErgoMeter startet...");
+    Serial.println("SmartErgoMeter starting...");
   }
 
-  rgbLedWrite(RGB_BUILTIN, RGB_BRIGHTNESS, RGB_BRIGHTNESS, 0); // Gelb = Start
+  rgbLedWrite(RGB_BUILTIN, RGB_BRIGHTNESS, RGB_BRIGHTNESS, 0); // yellow = startup
 
-  // Motor Pins: beim Start High-Z (MANUAL Modus, EM78P510 hat Vorrang)
+  // Motor pins: high-Z on startup (MANUAL mode, EM78P510 has priority)
   pinMode(PIN_MOTOR_IN1, INPUT);
   pinMode(PIN_MOTOR_IN2, INPUT);
 
-  // EM78P510 Aktivitätserkennung (OR: SENSE_A + SENSE_B via 2× BAT46)
+  // EM78P510 activity detection (OR: motor-OUT1 + motor-OUT2 via 2× BAT43)
   pinMode(PIN_EM78_ACTIVE, INPUT);
 
-  // Poti Enable (PNP-Basis, aktiv LOW)
+  // Poti enable (PNP base, active LOW)
   pinMode(PIN_POTI_EN, OUTPUT);
-  digitalWrite(PIN_POTI_EN, HIGH);  // PNP sperren → Poti stromlos beim Start
+  digitalWrite(PIN_POTI_EN, HIGH);  // PNP off → poti unpowered on startup
 
-  // Reed-Kontakt (Speed + Cadence)
+  // Reed contact (speed + cadence)
   pinMode(PIN_REED, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(PIN_REED), reedInterrupt, FALLING);
 
-  // Herzfrequenz
+  // Heart rate
   pinMode(PIN_HEARTRATE, INPUT);
   attachInterrupt(digitalPinToInterrupt(PIN_HEARTRATE), heartRateInterrupt, RISING);
 
@@ -378,7 +378,7 @@ void setup() {
   pAdvertising->addServiceUUID(BLEUUID((uint16_t)0x1826));
   pAdvertising->start();
 
-  if (serial_debug) Serial.printf("BLE gestartet: %s\n", deviceName);
+  if (serial_debug) Serial.printf("BLE started: %s\n", deviceName);
 }
 
 // ============================================================
@@ -418,31 +418,31 @@ void loop() {
   }
 #endif
 
-  // ---- Motorsteuerung ----
+  // ---- Motor control ----
   if (motorMode == KINOMAP) {
-    // ESP32 hat Vorrang → Zielposition halten
-    // driveToPosition() wird aus handleControlPoint() aufgerufen
+    // ESP32 has priority → maintain target position
+    // driveToPosition() is called from handleControlPoint()
   } else {
-    // MANUAL: EM78P510 treibt Motor direkt, DRV8833 gestoppt halten
+    // MANUAL: EM78P510 drives motor directly, keep pins high-Z
     handleManualMode();
   }
 
-  // ---- BLE Notifications ----
+  // ---- BLE notifications ----
   current_millis = millis();
   if (current_millis > previous_notification + NOTIFICATION_INTERVAL) {
 
-    // Sensorwerte berechnen (immer, damit Snapshots aktuell bleiben)
+    // Calculate sensor values (always, to keep snapshots current)
     instantaneous_speed   = calculateSpeed();
     instantaneous_cadence = calculateCadence();
     HeartRate             = calculateHeartRate();
     instantaneous_power   = calculatePower(instantaneous_speed);
 
-    // Counter-Snapshots immer aktualisieren (verhindert Akkumulation)
+    // Always update counter snapshots (prevents accumulation)
     speed_counter_prev = speed_counter;
     speed_timer_prev   = speed_timer;
     previous_notification = millis();
 
-    // Aktuelle Poti-Position lesen (immer, für Serial-Ausgabe)
+    // Read current poti position (always, for serial output)
     int potiRaw = readPotiPosition();
     currentResistance = map(constrain(potiRaw, POTI_ADC_MIN, POTI_ADC_MAX), POTI_ADC_MIN, POTI_ADC_MAX, 0, 100);
     if (serial_debug) Serial.printf("Poti: %d%% (ADC=%d)\n", currentResistance, potiRaw);
@@ -452,7 +452,7 @@ void loop() {
     }
   }
 
-  // ---- Control Point Handler ----
+  // ---- Control point handler ----
   if (previousControlPointEvent != lastControlPointEvent) {
     handleControlPoint();
     previousControlPointEvent = lastControlPointEvent;
@@ -460,15 +460,15 @@ void loop() {
 }
 
 // ============================================================
-// BLE: Indoor Bike Data schreiben
+// BLE: Write Indoor Bike Data characteristic
 // ============================================================
 void writeIndoorBikeDataCharacteristic() {
-  // Flags: Instantaneous Cadence + Power + Heart Rate
+  // Flags: instantaneous cadence + power + heart rate
   uint16_t flags = flagInstantaneousCadence | flagIntantaneousPower | flagHeartRate;
   ibdBuffer[0] = flags & 0xFF;
   ibdBuffer[1] = (flags >> 8) & 0xFF;
 
-  // Geschwindigkeit: km/h * 100 (uint16, resolution 0.01 km/h)
+  // Speed: km/h * 100 (uint16, resolution 0.01 km/h)
   int s = round(instantaneous_speed * 3.6 * 100.0);
   ibdBuffer[2] = s & 0xFF;
   ibdBuffer[3] = (s >> 8) & 0xFF;
@@ -478,12 +478,12 @@ void writeIndoorBikeDataCharacteristic() {
   ibdBuffer[4] = c & 0xFF;
   ibdBuffer[5] = (c >> 8) & 0xFF;
 
-  // Power: Watt (sint16)
+  // Power: watts (sint16)
   int p = round(instantaneous_power);
   ibdBuffer[6] = p & 0xFF;
   ibdBuffer[7] = (p >> 8) & 0xFF;
 
-  // Heart Rate: BPM (uint8)
+  // Heart rate: BPM (uint8)
   ibdBuffer[8] = HeartRate;
 
   pIndoorBikeData->setValue(ibdBuffer, sizeof(ibdBuffer));
@@ -500,7 +500,7 @@ void writeIndoorBikeDataCharacteristic() {
 }
 
 // ============================================================
-// BLE: Training Status schreiben
+// BLE: Write Training Status characteristic
 // ============================================================
 void writeTrainingStatus() {
   switch (training_status) {
@@ -523,7 +523,7 @@ void writeTrainingStatus() {
 }
 
 // ============================================================
-// BLE: Control Point Handler
+// BLE: Control Point handler
 // ============================================================
 void handleControlPoint() {
   if (serial_debug) {
@@ -555,7 +555,7 @@ void handleControlPoint() {
     }
 
     case fmcpSetTargetResistanceLevel: {
-      // KinoMap sendet Widerstand 0-200 (Einheit 0.5%) → wir mappen auf 0-100%
+      // KinoMap sends resistance 0-200 (unit 0.5%) → map to 0-100%
       int raw = fmcpData.values.OCTETS[0];
       targetResistance = constrain(map(raw, 0, 200, 0, 100), 0, 100);
       lastMotorCmd     = millis();
@@ -587,7 +587,7 @@ void handleControlPoint() {
       // Cw  (uint8, resolution 0.01)
       cw  = fmcpData.values.OCTETS[5] / 100.0;
 
-      // Grade → Widerstand mappen (-10% bis +20% → 0-100%)
+      // Grade → map to resistance (-10% to +20% → 0-100%)
       targetResistance = constrain(map((int)grade, -10, 20, 0, 100), 0, 100);
       lastMotorCmd     = millis();
 
@@ -607,7 +607,7 @@ void handleControlPoint() {
     }
 
     default: {
-      // Alle anderen Opcodes: nicht unterstützt
+      // All other opcodes: not supported
       ftmcpBuffer[0] = fmcpResponseCode;
       ftmcpBuffer[1] = fmcpData.values.OPCODE;
       ftmcpBuffer[2] = 0x02; // OpCode not supported
