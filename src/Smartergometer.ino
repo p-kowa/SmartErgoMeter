@@ -38,20 +38,23 @@ boolean write_startup_message = true;
                              // GPIO6=JTAG/MOSI auf ESP32-C3 → spurious Interrupts, daher GPIO2
 #define PIN_HEARTRATE   7    // Herzfrequenz Sensor (5V via 10k/18k Teiler) - GPIO7 funktioniert
 #define PIN_POTI        3    // ADC Potentiometer Schleifer
-                             // Hardware: Poti-Schleifer ──10kΩ──GPIO3──18kΩ──GND (Spannungsteiler)
-                             // Poti-VCC ~5V → Teiler: 5V × 18/(10+18) = 3.2V → sicher für ESP32
+                             // Hardware: Poti-Schleifer ──32kΩ──GPIO3──66kΩ──GND (Spannungsteiler)
+                             // Poti-VCC ~5V → Teiler: 5V × 66/(32+66) = 3.34V → sicher für ESP32 (max 3.6V)
 #define PIN_POTI_EN     5    // PNP-Transistor Basis-Steuerung (aktiv LOW!)
                              // GPIO5 LOW  → PNP öffnet → Poti bekommt Strom (Messung)
                              // GPIO5 HIGH → PNP sperrt → Poti stromlos (Ruhezustand)
                              // EM78P510 steuert PNP ebenfalls über 10kΩ → beide teilen sich den Transistor
                              // Kontention unkritisch da 10kΩ + 12kΩ in Reihe (~0.2mA)
-#define PIN_EM78_ACTIVE 1    // EM78P510 aktiv (OR: SENSE_A + SENSE_B via 2× BAT46 → GPIO1)
+#define PIN_EM78_ACTIVE 1    // EM78P510 aktiv (OR: Motor-OUT1 + Motor-OUT2 via 2× BAT43 → GPIO1)
                              // GPIO8 = RGB-LED auf C3 Super Mini → nicht verwenden!
-                             // Hardware: SENSE_A ──BAT46──┐
-                             //           SENSE_B ──BAT46──┴── GPIO1 + 10k→GND
-                             // HIGH = EM78P510 drückt Taste → DRV8833 sofort stoppen
-#define PIN_MOTOR_IN1   10   // DRV8833 IN1
-#define PIN_MOTOR_IN2   20   // DRV8833 IN2 (GPIO11 oft SPI-Flash intern auf C3!)
+                             // Hardware: EM78-OUT1 ──BAT43──┐
+                             //           EM78-OUT2 ──BAT43──┴──8.2kΩ──GPIO1──100kΩ──GND
+                             // 5V - 0.35V(BAT43) = 4.65V → Klemmdiode: 0.16mA → sicher
+                             // HIGH = EM78P510 treibt Motor → ESP32 sofort stoppen
+#define PIN_MOTOR_IN1   10   // H-Bridge Transistor 1 Basis (ESP32 über 12kΩ, EM78P510 über 10kΩ)
+#define PIN_MOTOR_IN2   20   // H-Bridge Transistor 2 Basis (ESP32 über 12kΩ, EM78P510 über 10kΩ)
+                             // KINOMAP: OUTPUT (ESP32 treibt HIGH/LOW)
+                             // MANUAL:  INPUT  (High-Z → EM78P510 hat volle Kontrolle)
 
 // ============================================================
 // MOTORSTEUERUNG
@@ -66,11 +69,15 @@ unsigned long lastMotorCmd   = 0;
 #define MOTOR_DRIVE_INTERVAL 50        // ms zwischen Poti-Lesungen beim Fahren
 
 void motorUp() {
+  pinMode(PIN_MOTOR_IN1, OUTPUT);
+  pinMode(PIN_MOTOR_IN2, OUTPUT);
   digitalWrite(PIN_MOTOR_IN1, HIGH);
   digitalWrite(PIN_MOTOR_IN2, LOW);
 }
 
 void motorDown() {
+  pinMode(PIN_MOTOR_IN1, OUTPUT);
+  pinMode(PIN_MOTOR_IN2, OUTPUT);
   digitalWrite(PIN_MOTOR_IN1, LOW);
   digitalWrite(PIN_MOTOR_IN2, HIGH);
 }
@@ -78,6 +85,8 @@ void motorDown() {
 void motorStop() {
   digitalWrite(PIN_MOTOR_IN1, LOW);
   digitalWrite(PIN_MOTOR_IN2, LOW);
+  pinMode(PIN_MOTOR_IN1, INPUT);  // High-Z → EM78P510 kann frei steuern
+  pinMode(PIN_MOTOR_IN2, INPUT);
 }
 
 // Poti kurz einschalten + ADC lesen
@@ -314,10 +323,9 @@ void setup() {
 
   rgbLedWrite(RGB_BUILTIN, RGB_BRIGHTNESS, RGB_BRIGHTNESS, 0); // Gelb = Start
 
-  // Motor Pins
-  pinMode(PIN_MOTOR_IN1, OUTPUT);
-  pinMode(PIN_MOTOR_IN2, OUTPUT);
-  motorStop();
+  // Motor Pins: beim Start High-Z (MANUAL Modus, EM78P510 hat Vorrang)
+  pinMode(PIN_MOTOR_IN1, INPUT);
+  pinMode(PIN_MOTOR_IN2, INPUT);
 
   // EM78P510 Aktivitätserkennung (OR: SENSE_A + SENSE_B via 2× BAT46)
   pinMode(PIN_EM78_ACTIVE, INPUT);
