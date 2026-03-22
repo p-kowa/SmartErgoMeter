@@ -22,6 +22,12 @@ boolean write_startup_message = true;
 // Gewicht Fahrer in kg (für Leistungsberechnung)
 #define RIDER_WEIGHT_KG  80.0
 
+// Potentiometer ADC-Grenzen (0-4095)
+// Kalibrieren: Motor manuell an Endanschlag fahren, Raw-ADC im Serial Monitor ablesen
+// Serial zeigt: "Poti: X% (ADC=YYYY)" → YYYY an Minimum- und Maximum-Anschlag notieren
+#define POTI_ADC_MIN     100   // ADC-Wert bei minimalem Widerstand (Anschlag unten)
+#define POTI_ADC_MAX     3900  // ADC-Wert bei maximalem Widerstand (Anschlag oben)
+
 // ============================================================
 // PIN DEFINITIONEN (ESP32-S3)
 // ============================================================
@@ -31,8 +37,14 @@ boolean write_startup_message = true;
                              // Kein Teiler nach GND → EM78P510 bleibt unbelastet
                              // GPIO6=JTAG/MOSI auf ESP32-C3 → spurious Interrupts, daher GPIO2
 #define PIN_HEARTRATE   7    // Herzfrequenz Sensor (5V via 10k/18k Teiler) - GPIO7 funktioniert
-#define PIN_POTI        4    // ADC Potentiometer Schleifer (ADC1_CH4, kein BLE-Konflikt)
-#define PIN_POTI_EN     5    // MOSFET Gate: Poti-Versorgung einschalten
+#define PIN_POTI        3    // ADC Potentiometer Schleifer
+                             // Hardware: Poti-Schleifer ──10kΩ──GPIO3──18kΩ──GND (Spannungsteiler)
+                             // Poti-VCC ~5V → Teiler: 5V × 18/(10+18) = 3.2V → sicher für ESP32
+#define PIN_POTI_EN     5    // PNP-Transistor Basis-Steuerung (aktiv LOW!)
+                             // GPIO5 LOW  → PNP öffnet → Poti bekommt Strom (Messung)
+                             // GPIO5 HIGH → PNP sperrt → Poti stromlos (Ruhezustand)
+                             // EM78P510 steuert PNP ebenfalls über 10kΩ → beide teilen sich den Transistor
+                             // Kontention unkritisch da 10kΩ + 12kΩ in Reihe (~0.2mA)
 #define PIN_EM78_ACTIVE 1    // EM78P510 aktiv (OR: SENSE_A + SENSE_B via 2× BAT46 → GPIO1)
                              // GPIO8 = RGB-LED auf C3 Super Mini → nicht verwenden!
                              // Hardware: SENSE_A ──BAT46──┐
@@ -69,11 +81,12 @@ void motorStop() {
 }
 
 // Poti kurz einschalten + ADC lesen
+// PNP-Logik: LOW = EIN, HIGH = AUS
 int readPotiPosition() {
-  digitalWrite(PIN_POTI_EN, HIGH);
+  digitalWrite(PIN_POTI_EN, LOW);   // PNP öffnen → Poti einschalten
   delay(5);
   int val = analogRead(PIN_POTI);
-  digitalWrite(PIN_POTI_EN, LOW);
+  digitalWrite(PIN_POTI_EN, HIGH);  // PNP sperren → Poti ausschalten
   return val; // 0-4095
 }
 
@@ -93,7 +106,7 @@ void driveToPosition(int targetPct) {
     }
 
     int currentAdc = readPotiPosition();
-    currentResistance = map(currentAdc, 0, 4095, 0, 100);
+    currentResistance = map(constrain(currentAdc, POTI_ADC_MIN, POTI_ADC_MAX), POTI_ADC_MIN, POTI_ADC_MAX, 0, 100);
 
     if (abs(currentAdc - targetAdc) <= POTI_TOLERANCE) {
       motorStop();
@@ -309,9 +322,9 @@ void setup() {
   // EM78P510 Aktivitätserkennung (OR: SENSE_A + SENSE_B via 2× BAT46)
   pinMode(PIN_EM78_ACTIVE, INPUT);
 
-  // Poti Enable (MOSFET)
+  // Poti Enable (PNP-Basis, aktiv LOW)
   pinMode(PIN_POTI_EN, OUTPUT);
-  digitalWrite(PIN_POTI_EN, LOW);
+  digitalWrite(PIN_POTI_EN, HIGH);  // PNP sperren → Poti stromlos beim Start
 
   // Reed-Kontakt (Speed + Cadence)
   pinMode(PIN_REED, INPUT_PULLUP);
@@ -421,9 +434,12 @@ void loop() {
     speed_timer_prev   = speed_timer;
     previous_notification = millis();
 
+    // Aktuelle Poti-Position lesen (immer, für Serial-Ausgabe)
+    int potiRaw = readPotiPosition();
+    currentResistance = map(constrain(potiRaw, POTI_ADC_MIN, POTI_ADC_MAX), POTI_ADC_MIN, POTI_ADC_MAX, 0, 100);
+    if (serial_debug) Serial.printf("Poti: %d%% (ADC=%d)\n", currentResistance, potiRaw);
+
     if (ble_connected == HIGH) {
-      // Aktuelle Poti-Position lesen
-      currentResistance = map(readPotiPosition(), 0, 4095, 0, 100);
       writeIndoorBikeDataCharacteristic();
     }
   }
