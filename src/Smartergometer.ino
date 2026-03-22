@@ -25,8 +25,8 @@ boolean write_startup_message = true;
 // Potentiometer ADC-Grenzen (0-4095)
 // Kalibrieren: Motor manuell an Endanschlag fahren, Raw-ADC im Serial Monitor ablesen
 // Serial zeigt: "Poti: X% (ADC=YYYY)" → YYYY an Minimum- und Maximum-Anschlag notieren
-#define POTI_ADC_MIN     100   // ADC-Wert bei minimalem Widerstand (Anschlag unten)
-#define POTI_ADC_MAX     3900  // ADC-Wert bei maximalem Widerstand (Anschlag oben)
+#define POTI_ADC_MIN     1246  // ADC-Wert bei minimalem Widerstand (gemessen: 1245-1247)
+#define POTI_ADC_MAX     4059  // ADC-Wert bei maximalem Widerstand (gemessen: 4058-4060)
 
 // ============================================================
 // PIN DEFINITIONEN (ESP32-S3)
@@ -93,7 +93,7 @@ int readPotiPosition() {
 // Motor auf Zielposition fahren (blockierend, max 5 Sek.)
 // Bricht sofort ab wenn EM78P510 eine Taste drückt (Kollisionsschutz)
 void driveToPosition(int targetPct) {
-  int targetAdc  = map(targetPct, 0, 100, 0, 4095);
+  int targetAdc  = map(targetPct, 0, 100, POTI_ADC_MIN, POTI_ADC_MAX);
   unsigned long startTime = millis();
 
   while (millis() - startTime < 5000) {
