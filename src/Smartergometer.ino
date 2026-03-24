@@ -445,7 +445,11 @@ void loop() {
     // Read current poti position (always, for serial output)
     int potiRaw = readPotiPosition();
     currentResistance = map(constrain(potiRaw, POTI_ADC_MIN, POTI_ADC_MAX), POTI_ADC_MIN, POTI_ADC_MAX, 0, 100);
-    if (serial_debug) Serial.printf("Poti: %d%% (ADC=%d)\n", currentResistance, potiRaw);
+    bool em78Active = digitalRead(PIN_EM78_ACTIVE);
+    if (serial_debug) Serial.printf("Poti: %d%% (ADC=%d) | EM78: %s | Mode: %s\n",
+      currentResistance, potiRaw,
+      em78Active ? "ACTIVE" : "idle",
+      motorMode == KINOMAP ? "KINOMAP" : "MANUAL");
 
     if (ble_connected == HIGH) {
       writeIndoorBikeDataCharacteristic();
