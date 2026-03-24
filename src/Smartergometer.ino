@@ -392,6 +392,15 @@ void setup() {
   pAdvertising->start();
 
   if (serial_debug) Serial.printf("BLE started: %s\n", deviceName);
+
+  // Motor self-test: drive to 15% then back to 0%
+  // Runs before any BLE connection to verify motor wiring independently
+  if (serial_debug) Serial.println("Motor self-test: driving to 15%...");
+  driveToPosition(15);
+  delay(1000);
+  if (serial_debug) Serial.println("Motor self-test: driving to 0%...");
+  driveToPosition(0);
+  if (serial_debug) Serial.println("Motor self-test done.");
 }
 
 // ============================================================
