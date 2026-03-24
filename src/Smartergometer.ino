@@ -257,7 +257,9 @@ long          previousControlPointEvent = 0;
 unsigned char ftmfBuffer[8] = { 0b10000111, 0b01000100, 0, 0,
                                  0b10000100, 0,          0, 0 };
 unsigned char ibdBuffer[9]  = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-unsigned char srlrBuffer[4] = { 0, 100, 0, 1 };  // Min=0, Max=100, Step=1
+unsigned char srlrBuffer[6] = { 0x00, 0x00,   // Min = 0   (× 0.1 = 0.0)
+                                0xE8, 0x03,   // Max = 1000 (× 0.1 = 100.0)
+                                0x0A, 0x00 }; // Step = 10  (× 0.1 = 1.0%)
 unsigned char ftmsBuffer[2] = { 0, 0 };
 unsigned char tsBuffer[2]   = { 0x00, 0x00 };
 unsigned char ftmcpBuffer[20];
@@ -380,7 +382,7 @@ void setup() {
 
   pFitnessMachineFeature->setValue(ftmfBuffer, 8);
   pIndoorBikeData->setValue(ibdBuffer, sizeof(ibdBuffer));
-  pSupportedResistanceLevelRange->setValue(srlrBuffer, 4);
+  pSupportedResistanceLevelRange->setValue(srlrBuffer, 6);
   pFitnessMachineStatus->setValue(ftmsBuffer, 2);
   pTrainingStatus->setValue(tsBuffer, 2);
   pFitnessMachineControlPoint->setCallbacks(new ControlPointCallbacks());
@@ -561,9 +563,9 @@ void handleControlPoint() {
     }
 
     case fmcpSetTargetResistanceLevel: {
-      // KinoMap sends resistance 0-200 (unit 0.5%) → map to 0-100%
-      int raw = fmcpData.values.OCTETS[0];
-      targetResistance = constrain(map(raw, 0, 200, 0, 100), 0, 100);
+      // SINT16, resolution 0.1 → value 0-1000 = 0.0-100.0%
+      int16_t raw = (int16_t)((fmcpData.values.OCTETS[1] << 8) | fmcpData.values.OCTETS[0]);
+      targetResistance = constrain(raw / 10, 0, 100); // convert to 0-100%
       lastMotorCmd     = millis();
 
       // Send indicate BEFORE driving motor to avoid BLE timeout
