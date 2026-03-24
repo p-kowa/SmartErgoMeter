@@ -359,7 +359,7 @@ void setup() {
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_BT);
   char deviceName[30];
-  sprintf(deviceName, "FTMS_%02X%02X%02X", mac[3], mac[4], mac[5]);
+  sprintf(deviceName, "FTMS%02X%02X%02X%02X", mac[2], mac[3], mac[4], mac[5]);
 
   BLEDevice::init(deviceName);
   pServer = BLEDevice::createServer();
@@ -393,14 +393,6 @@ void setup() {
 
   if (serial_debug) Serial.printf("BLE started: %s\n", deviceName);
 
-  // Motor self-test: drive to 15% then back to 0%
-  // Runs before any BLE connection to verify motor wiring independently
-  if (serial_debug) Serial.println("Motor self-test: driving to 15%...");
-  driveToPosition(15);
-  delay(1000);
-  if (serial_debug) Serial.println("Motor self-test: driving to 0%...");
-  driveToPosition(0);
-  if (serial_debug) Serial.println("Motor self-test done.");
 }
 
 // ============================================================
@@ -581,7 +573,7 @@ void handleControlPoint() {
       pFitnessMachineControlPoint->setValue(ftmcpBuffer, 3);
       pFitnessMachineControlPoint->indicate();
 
-      if (serial_debug) Serial.printf("Resistance → %d%%\n", targetResistance);
+      if (serial_debug) Serial.printf("Resistance → %d%% (raw=%d)\n", targetResistance, raw);
       driveToPosition(targetResistance);
       break;
     }
