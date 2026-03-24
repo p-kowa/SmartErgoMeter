@@ -137,8 +137,18 @@ void driveToPosition(int targetPct) {
 
 // MANUAL mode: EM78P510 drives motor directly via its own H-bridge
 // Motor pins kept high-Z so there is no conflict
+// Called once on mode transition, not every loop iteration
 void handleManualMode() {
-  motorStop(); // keep pins high-Z
+  static ControlMode lastMode = KINOMAP;
+  if (lastMode != MANUAL) {
+    motorStop(); // set high-Z only on transition
+    lastMode = MANUAL;
+  }
+}
+
+void resetManualModeTracker() {
+  // Call when switching to KINOMAP so next MANUAL transition triggers motorStop()
+  // (handled implicitly since lastMode is static)
 }
 
 // ============================================================
@@ -445,14 +455,9 @@ void loop() {
     speed_timer_prev   = speed_timer;
     previous_notification = millis();
 
-    // Read current poti position (always, for serial output)
+    // Read current poti position
     int potiRaw = readPotiPosition();
     currentResistance = map(constrain(potiRaw, POTI_ADC_MIN, POTI_ADC_MAX), POTI_ADC_MIN, POTI_ADC_MAX, 0, 100);
-    bool em78Active = digitalRead(PIN_EM78_ACTIVE);
-    if (serial_debug) Serial.printf("Poti: %d%% (ADC=%d) | EM78: %s | Mode: %s\n",
-      currentResistance, potiRaw,
-      em78Active ? "ACTIVE" : "idle",
-      motorMode == KINOMAP ? "KINOMAP" : "MANUAL");
 
     if (ble_connected == HIGH) {
       writeIndoorBikeDataCharacteristic();
@@ -496,14 +501,7 @@ void writeIndoorBikeDataCharacteristic() {
   pIndoorBikeData->setValue(ibdBuffer, sizeof(ibdBuffer));
   pIndoorBikeData->notify();
 
-  if (serial_debug) {
-    Serial.printf("Speed: %.1f km/h | Cadence: %d RPM | Power: %.0f W | HR: %d BPM | Resistance: %d%%\n",
-      instantaneous_speed * 3.6,
-      instantaneous_cadence,
-      instantaneous_power,
-      HeartRate,
-      currentResistance);
-  }
+  // Serial output intentionally removed from notify loop to avoid blocking BLE
 }
 
 // ============================================================
@@ -567,15 +565,15 @@ void handleControlPoint() {
       targetResistance = constrain(map(raw, 0, 200, 0, 100), 0, 100);
       lastMotorCmd     = millis();
 
-      if (serial_debug) Serial.printf("SetResistance: %d%% (raw=%d)\n", targetResistance, raw);
-
-      driveToPosition(targetResistance);
-
+      // Send indicate BEFORE driving motor to avoid BLE timeout
       ftmcpBuffer[0] = fmcpResponseCode;
       ftmcpBuffer[1] = fmcpData.values.OPCODE;
       ftmcpBuffer[2] = 0x01; // Success
       pFitnessMachineControlPoint->setValue(ftmcpBuffer, 3);
       pFitnessMachineControlPoint->indicate();
+
+      if (serial_debug) Serial.printf("Resistance → %d%%\n", targetResistance);
+      driveToPosition(targetResistance);
       break;
     }
 
@@ -598,18 +596,15 @@ void handleControlPoint() {
       targetResistance = constrain(map((int)grade, -10, 20, 0, 100), 0, 100);
       lastMotorCmd     = millis();
 
-      if (serial_debug) {
-        Serial.printf("Simulation: Wind=%.2f Grade=%.1f%% Crr=%.4f Cw=%.2f → Resistance=%d%%\n",
-          wind_speed, grade, crr, cw, targetResistance);
-      }
-
-      driveToPosition(targetResistance);
-
+      // Send indicate BEFORE driving motor to avoid BLE timeout
       ftmcpBuffer[0] = fmcpResponseCode;
       ftmcpBuffer[1] = fmcpData.values.OPCODE;
       ftmcpBuffer[2] = 0x01; // Success
       pFitnessMachineControlPoint->setValue(ftmcpBuffer, 3);
       pFitnessMachineControlPoint->indicate();
+
+      if (serial_debug) Serial.printf("Simulation: Grade=%.1f%% → Resistance=%d%%\n", grade, targetResistance);
+      driveToPosition(targetResistance);
       break;
     }
 
