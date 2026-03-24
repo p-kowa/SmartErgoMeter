@@ -51,8 +51,8 @@ boolean write_startup_message = true;
                              //           EM78-OUT2 ──BAT43──┴──8.2kΩ──GPIO1──100kΩ──GND
                              // 5V - 0.35V(BAT43) = 4.65V → clamp diode: 0.16mA → safe
                              // HIGH = EM78P510 driving motor → ESP32 must stop immediately
-#define PIN_MOTOR_IN1   10   // H-bridge transistor 1 base (ESP32 via 12kΩ, EM78P510 via 10kΩ)
-#define PIN_MOTOR_IN2   20   // H-bridge transistor 2 base (ESP32 via 12kΩ, EM78P510 via 10kΩ)
+#define PIN_MOTOR_IN_DOWN   10   // H-bridge transistor 1 base (ESP32 via 12kΩ, EM78P510 via 10kΩ)
+#define PIN_MOTOR_IN_UP     20   // H-bridge transistor 2 base (ESP32 via 12kΩ, EM78P510 via 10kΩ)
                              // KINOMAP: OUTPUT (ESP32 drives HIGH/LOW)
                              // MANUAL:  INPUT  (high-Z → EM78P510 has full control)
 
@@ -68,25 +68,25 @@ unsigned long lastMotorCmd   = 0;
 #define POTI_TOLERANCE       80        // ADC tolerance band (0-4095)
 #define MOTOR_DRIVE_INTERVAL 50        // ms between poti readings while driving
 
-void motorUp() {
-  pinMode(PIN_MOTOR_IN1, OUTPUT);
-  pinMode(PIN_MOTOR_IN2, OUTPUT);
-  digitalWrite(PIN_MOTOR_IN1, HIGH);
-  digitalWrite(PIN_MOTOR_IN2, LOW);
+void motorDown() {
+  pinMode(PIN_MOTOR_IN_DOWN, OUTPUT);
+  pinMode(PIN_MOTOR_IN_UP, OUTPUT);
+  digitalWrite(PIN_MOTOR_IN_DOWN, HIGH);
+  digitalWrite(PIN_MOTOR_IN_UP, LOW);
 }
 
-void motorDown() {
-  pinMode(PIN_MOTOR_IN1, OUTPUT);
-  pinMode(PIN_MOTOR_IN2, OUTPUT);
-  digitalWrite(PIN_MOTOR_IN1, LOW);
-  digitalWrite(PIN_MOTOR_IN2, HIGH);
+void motorUp() {
+  pinMode(PIN_MOTOR_IN_DOWN, OUTPUT);
+  pinMode(PIN_MOTOR_IN_UP, OUTPUT);
+  digitalWrite(PIN_MOTOR_IN_DOWN, LOW);
+  digitalWrite(PIN_MOTOR_IN_UP, HIGH);
 }
 
 void motorStop() {
-  digitalWrite(PIN_MOTOR_IN1, LOW);
-  digitalWrite(PIN_MOTOR_IN2, LOW);
-  pinMode(PIN_MOTOR_IN1, INPUT);  // high-Z → EM78P510 can control freely
-  pinMode(PIN_MOTOR_IN2, INPUT);
+  digitalWrite(PIN_MOTOR_IN_DOWN, LOW);
+  digitalWrite(PIN_MOTOR_IN_UP, LOW);
+  pinMode(PIN_MOTOR_IN_DOWN, INPUT);  // high-Z → EM78P510 can control freely
+  pinMode(PIN_MOTOR_IN_UP, INPUT);
 }
 
 // Briefly power poti and read ADC
@@ -324,8 +324,8 @@ void setup() {
   rgbLedWrite(RGB_BUILTIN, RGB_BRIGHTNESS, RGB_BRIGHTNESS, 0); // yellow = startup
 
   // Motor pins: high-Z on startup (MANUAL mode, EM78P510 has priority)
-  pinMode(PIN_MOTOR_IN1, INPUT);
-  pinMode(PIN_MOTOR_IN2, INPUT);
+  pinMode(PIN_MOTOR_IN_DOWN, INPUT);
+  pinMode(PIN_MOTOR_IN_UP, INPUT);
 
   // EM78P510 activity detection (OR: motor-OUT1 + motor-OUT2 via 2× BAT43)
   pinMode(PIN_EM78_ACTIVE, INPUT);
