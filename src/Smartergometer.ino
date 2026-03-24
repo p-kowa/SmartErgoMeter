@@ -242,7 +242,10 @@ volatile long lastControlPointEvent   = 0;
 long          previousControlPointEvent = 0;
 
 // Feature flags
-unsigned char ftmfBuffer[4] = { 0b10000111, 0b01000100, 0, 0 };
+// Bytes 0-3: Fitness Machine Features  (cadence, resistance, power, HR)
+// Bytes 4-7: Target Setting Features   (bit2=ResistanceLevel, bit7=SimulationParams)
+unsigned char ftmfBuffer[8] = { 0b10000111, 0b01000100, 0, 0,
+                                 0b10000100, 0,          0, 0 };
 unsigned char ibdBuffer[9]  = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 unsigned char srlrBuffer[4] = { 0, 100, 0, 1 };  // Min=0, Max=100, Step=1
 unsigned char ftmsBuffer[2] = { 0, 0 };
@@ -365,7 +368,7 @@ void setup() {
   pFitnessMachineStatus          = pFTMSService->createCharacteristic(BLEUUID((uint16_t)0x2ADA), BLECharacteristic::PROPERTY_NOTIFY);
   pFitnessMachineStatus->addDescriptor(new BLE2902());
 
-  pFitnessMachineFeature->setValue(ftmfBuffer, 4);
+  pFitnessMachineFeature->setValue(ftmfBuffer, 8);
   pIndoorBikeData->setValue(ibdBuffer, sizeof(ibdBuffer));
   pSupportedResistanceLevelRange->setValue(srlrBuffer, 4);
   pFitnessMachineStatus->setValue(ftmsBuffer, 2);
