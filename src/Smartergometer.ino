@@ -5,9 +5,6 @@
 #include <math.h>
 #include "esp_mac.h"
 
-// ============================================================
-// CONFIGURATION
-// ============================================================
 #define FAKE_DATA 0                    // 1 = test data, 0 = real sensors
 
 boolean serial_debug         = true;  // false when no PC connected
@@ -51,8 +48,8 @@ boolean write_startup_message = true;
                              //           EM78-OUT2 ──BAT43──┴──8.2kΩ──GPIO1──100kΩ──GND
                              // 5V - 0.35V(BAT43) = 4.65V → clamp diode: 0.16mA → safe
                              // HIGH = EM78P510 driving motor → ESP32 must stop immediately
-#define PIN_MOTOR_IN_DOWN   10   // H-bridge transistor 1 base (ESP32 via 12kΩ, EM78P510 via 10kΩ)
-#define PIN_MOTOR_IN_UP     20   // H-bridge transistor 2 base (ESP32 via 12kΩ, EM78P510 via 10kΩ)
+#define PIN_MOTOR_IN_DOWN   10   // H-bridge transistor 1 base (ESP32 via 8.2kΩ, EM78P510 via 10kΩ)
+#define PIN_MOTOR_IN_UP     20   // H-bridge transistor 2 base (ESP32 via 8.2kΩ, EM78P510 via 10kΩ)
                              // KINOMAP: OUTPUT (ESP32 drives HIGH/LOW)
                              // MANUAL:  INPUT  (high-Z → EM78P510 has full control)
 
